@@ -320,13 +320,13 @@ parse(State0, Bin) ->
 -spec parse1(state(), Input :: binary(), Result :: [tag()]) -> {state(), [tag()]} | endtag().
 parse1(#state{start = Start} = State, Bin, Result) ->
     case binary:match(Bin, [Start, <<"\n">>]) of
-        nomatch -> {State, ?ADD(Bin, Result)};
+        nomatch -> {State, ?ADD(Bin, Result)}; %% 整个就是个binary
         {S, L}  ->
             Pos = S + L,
             B2  = binary:part(Bin, Pos, byte_size(Bin) - Pos),
             case binary:at(Bin, S) of
                 $\n -> parse1(State#state{standalone = true}, B2, ?ADD(binary:part(Bin, 0, Pos), Result)); % \n
-                _   -> parse2(State, split_tag(State, Bin), Result)
+                _   -> parse2(State, split_tag(State, Bin), Result) %% 找到标签了，整个文本向前找标签
             end
     end.
 
@@ -335,7 +335,7 @@ parse1(#state{start = Start} = State, Bin, Result) ->
 %% ATTENTION: The result is a list that is inverted.
 -spec parse2(state(), iolist(), Result :: [tag()]) -> {state(), [tag()]} | endtag().
 parse2(State, [B1, B2, B3], Result) ->
-    case remove_space_from_head(B2) of
+    case remove_space_from_head(B2) of %% 清除space，然后匹配tag类型
         <<T, Tag/binary>> when T =:= $&; T =:= ${ ->
             parse1(State#state{standalone = false}, B3, [{'&', keys(Tag)} | ?ADD(B1, Result)]);
         <<T, Tag/binary>> when T =:= $#; T =:= $^ ->
@@ -432,32 +432,32 @@ split_tag(#state{start = StartDelimiter, stop = StopDelimiter}, Bin) ->
         nomatch ->
             [Bin];
         {StartPos, StartDelimiterLen} ->
-            PosLimit = byte_size(Bin) - StartDelimiterLen,
-            ShiftNum = while({true, StartPos + 1},
-                             fun(Pos) ->
+            PosLimit = byte_size(Bin) - StartDelimiterLen, 
+            ShiftNum = while({true, StartPos + 1}, %% 在下一个StartStartDelimiter之前一直向前推进
+                             fun(Pos) ->  %% {{{ ,startPos 0, StartDelimiterLen = 2 ShitNum = 1
                                      ?IIF(Pos =< PosLimit
                                           andalso binary:part(Bin, Pos, StartDelimiterLen) =:= StartDelimiter,
                                           {true, Pos + 1}, {false, Pos})
                              end) - StartPos - 1,
-            {PreTag, X} = split_binary(Bin, StartPos + ShiftNum),
-            Tag0        = part(X, StartDelimiterLen, 0),
+            {PreTag, X} = split_binary(Bin, StartPos + ShiftNum), %% 分割标签和后面的文本
+            Tag0        = part(X, StartDelimiterLen, 0), %%  去掉StartDelimiter
             case binary:split(Tag0, StopDelimiter) of
-                [_]          -> [PreTag, Tag0]; % not found.
-                [Tag, Rest]  ->
-                    IncludeStartDelimiterTag = binary:part(X, 0, byte_size(Tag) + StartDelimiterLen),
-                    E = ?IIF(repeatedly_binary(StopDelimiter, $}),
-                             ?IIF(byte_size(Rest) > 0 andalso binary:first(Rest) =:= $}, 1, 0),
-                             ?IIF(byte_size(Tag) > 0 andalso binary:last(Tag) =:= $}, -1, 0)),
-                    S = ?IIF(repeatedly_binary(StartDelimiter, ${),
-                             ?IIF(ShiftNum > 0, -1, 0),
-                             ?IIF(byte_size(Tag) > 0 andalso binary:first(Tag) =:= ${, 1, 0)),
-                    case E =:= 0 orelse S =:= 0 of
+                [_]          -> [PreTag, Tag0]; % not found. 这段文本里面没有StopDelimiter
+                [Tag, Rest]  -> %% 找到Tag了
+                    IncludeStartDelimiterTag = binary:part(X, 0, byte_size(Tag) + StartDelimiterLen),%%切出包含StartDelimiter的tag
+                    E = ?IIF(repeatedly_binary(StopDelimiter, $}), %% 判断是否是重复的}}
+                             ?IIF(byte_size(Rest) > 0 andalso binary:first(Rest) =:= $}, 1, 0),%% 检查剩余部分第一个元素是否是}
+                             ?IIF(byte_size(Tag) > 0 andalso binary:last(Tag) =:= $}, -1, 0)),%% 检查tag最后的一个元素是否是}
+                    S = ?IIF(repeatedly_binary(StartDelimiter, ${), %% 判断是否是重复的{{
+                             ?IIF(ShiftNum > 0, -1, 0),%% 找到{{之前的ShiftNum大于0就为-1否则为0
+                             ?IIF(byte_size(Tag) > 0 andalso binary:first(Tag) =:= ${, 1, 0)),%% 判断第一个元素是否是{
+                    case E =:= 0 orelse S =:= 0 of %% 如果 S = 0 代表{{之前没有东西或者Tag中第一个元素不是{,
                         true ->  % {{ ... }}
-                            [PreTag, Tag, Rest];
+                            [PreTag, Tag, Rest]; %% 这个是一个存粹的Tag
                         false -> % {{{ ... }}}
-                            [part(PreTag, 0, min(0, S)),
-                             part(IncludeStartDelimiterTag, max(0, S) + StartDelimiterLen - 1, min(0, E)),
-                             part(Rest, max(0, E), 0)]
+                            [part(PreTag, 0, min(0, S)), %% 去掉 {
+                             part(IncludeStartDelimiterTag, max(0, S) + StartDelimiterLen - 1, min(0, E)), %% 获取真正的tag,其中包含了类型{tag
+                             part(Rest, max(0, E), 0)] %% 去掉 }
                     end
             end
     end.
